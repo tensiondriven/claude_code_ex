@@ -1,0 +1,16 @@
+{
+  "name": "claude-agent-elixir-bridge",
+  "version": "1.0.0",
+  "description": "Node.js agent to bridge Elixir with the Claude Agent SDK",
+  "main": "dist/agent.js",
+  "scripts": {
+    "build": "./node_modules/.bin/tsc"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}

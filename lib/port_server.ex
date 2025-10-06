@@ -118,9 +118,9 @@ defmodule ClaudeCodeEx.PortServer do
       )
 
   """
-  @spec query(String.t(), keyword()) :: {:ok, query_id()} | {:error, term()}
-  def query(prompt, opts \\ []) do
-    GenServer.call(__MODULE__, {:query, prompt, opts})
+  @spec query(String.t(), pid() | nil, keyword()) :: {:ok, query_id()} | {:error, term()}
+  def query(prompt, owner_pid \\ nil, opts \\ []) do
+    GenServer.call(__MODULE__, {:query, prompt, owner_pid, opts})
   end
 
   @doc """
@@ -188,24 +188,50 @@ defmodule ClaudeCodeEx.PortServer do
   end
 
   @impl true
-  def handle_call({:query, prompt, opts}, from, state) do
+  def handle_call({:query, prompt, owner_pid, opts}, from, state) do
     if state[:test_mode] do
       {:reply, {:error, :test_mode}, state}
     else
       query_id = generate_query_id()
+      tools = Keyword.get(opts, :tools, [])
+
+      # Sanitize tools for the JS agent, converting to the expected format.
+      js_tools =
+        Enum.map(tools, fn tool ->
+          %{
+            "name" => tool.name,
+            "description" => tool.description,
+            "inputSchema" => tool.input_schema
+          }
+        end)
+
+      js_options =
+        opts
+        |> opts_to_js_options()
+        |> Map.put("tools", js_tools)
 
       request = %{
         type: "query",
         query_id: query_id,
         prompt: prompt,
-        options: opts_to_js_options(opts)
+        options: js_options
       }
 
       json = Jason.encode!(request)
       Port.command(state.port, json <> "\n")
 
-      # Store caller info
-      pending = Map.put(state.pending, query_id, %{from: from, messages: []})
+      recipient_pid = if owner_pid, do: owner_pid, else: elem(from, 0)
+
+      # Store the full tool structs, including implementation, in the pending state.
+      pending =
+        Map.put(state.pending, query_id, %{
+          from: from,
+          recipient: recipient_pid,
+          messages: [],
+          tools: tools
+        })
+
+      GenServer.reply(from, {:ok, query_id})
 
       {:noreply, %{state | pending: pending}}
     end
@@ -271,13 +297,13 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "message", "query_id" => query_id} = response, state) do
     case Map.get(state.pending, query_id) do
-      %{from: from} = query_state ->
+      %{recipient: recipient} = query_state ->
         # Accumulate messages
         messages = [response["data"] | query_state.messages]
         pending = Map.put(state.pending, query_id, %{query_state | messages: messages})
 
-        # Send intermediate update to caller
-        send(elem(from, 0), {:agent_message, query_id, response["data"]})
+        # Send intermediate update to the designated recipient
+        send(recipient, {:agent_message, query_id, response["data"]})
 
         {:noreply, %{state | pending: pending}}
 
@@ -289,28 +315,55 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "tool_use", "query_id" => query_id} = response, state) do
     case Map.get(state.pending, query_id) do
-      %{from: from} ->
+      %{recipient: recipient, tools: tools} ->
+        tool_name = response["tool"]
+        tool_args = response["args"]
+        tool_use_id = response["tool_use_id"]
+
+        # Forward the tool_use event to the client for visibility
         send(
-          elem(from, 0),
+          recipient,
           {:agent_event, query_id, :tool_use,
-           %{
-             tool: response["tool"],
-             args: response["args"],
-             tool_use_id: response["tool_use_id"]
-           }}
+           %{tool: tool_name, args: tool_args, tool_use_id: tool_use_id}}
         )
+
+        # Find and execute the Elixir tool implementation
+        case Enum.find(tools, &(&1.name == tool_name || to_string(&1.name) == tool_name)) do
+          nil ->
+            # This case should ideally not be reached if validations are correct
+            Logger.error("Agent tried to use unknown tool: #{tool_name}")
+
+          %ClaudeCodeEx.Tool{implementation: impl} ->
+            result =
+              try do
+                impl.(tool_args)
+              rescue
+                e -> {:error, "Tool execution failed: #{inspect(e)}"}
+              end
+
+            # Send the result back to the Node.js agent
+            result_payload = %{
+              type: "tool_result",
+              query_id: query_id,
+              tool_use_id: tool_use_id,
+              result: result
+            }
+
+            Port.command(state.port, Jason.encode!(result_payload) <> "\n")
+        end
 
         {:noreply, state}
 
-      nil ->
+      _ ->
+        # No tools defined for this query, or query not found
         {:noreply, state}
     end
   end
 
   defp handle_response(%{"type" => "text", "query_id" => query_id} = response, state) do
     case Map.get(state.pending, query_id) do
-      %{from: from} ->
-        send(elem(from, 0), {:agent_event, query_id, :text, response["text"]})
+      %{recipient: recipient} ->
+        send(recipient, {:agent_event, query_id, :text, response["text"]})
         {:noreply, state}
 
       nil ->
@@ -320,8 +373,8 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "thinking", "query_id" => query_id} = response, state) do
     case Map.get(state.pending, query_id) do
-      %{from: from} ->
-        send(elem(from, 0), {:agent_event, query_id, :thinking, response["thinking"]})
+      %{recipient: recipient} ->
+        send(recipient, {:agent_event, query_id, :thinking, response["thinking"]})
         {:noreply, state}
 
       nil ->
@@ -331,9 +384,9 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "tool_result", "query_id" => query_id} = response, state) do
     case Map.get(state.pending, query_id) do
-      %{from: from} ->
+      %{recipient: recipient} ->
         send(
-          elem(from, 0),
+          recipient,
           {:agent_event, query_id, :tool_result,
            %{tool_use_id: response["tool_use_id"], result: response["result"]}}
         )
@@ -347,8 +400,8 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "partial_message", "query_id" => query_id} = response, state) do
     case Map.get(state.pending, query_id) do
-      %{from: from} ->
-        send(elem(from, 0), {:agent_event, query_id, :partial_message, response["delta"]})
+      %{recipient: recipient} ->
+        send(recipient, {:agent_event, query_id, :partial_message, response["delta"]})
         {:noreply, state}
 
       nil ->
@@ -358,8 +411,8 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "system", "query_id" => query_id} = response, state) do
     case Map.get(state.pending, query_id) do
-      %{from: from} ->
-        send(elem(from, 0), {:agent_event, query_id, :system, response["system_message"]})
+      %{recipient: recipient} ->
+        send(recipient, {:agent_event, query_id, :system, response["system_message"]})
         {:noreply, state}
 
       nil ->
@@ -369,9 +422,9 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "done", "query_id" => query_id}, state) do
     case Map.pop(state.pending, query_id) do
-      {%{from: from, messages: messages}, pending} ->
-        # Reply with all accumulated messages
-        GenServer.reply(from, {:ok, Enum.reverse(messages)})
+      {%{recipient: recipient, messages: messages}, pending} ->
+        # Send a final "done" event. The GenServer call already replied.
+        send(recipient, {:agent_event, query_id, :done, %{messages: Enum.reverse(messages)}})
         {:noreply, %{state | pending: pending}}
 
       {nil, _} ->
@@ -382,8 +435,9 @@ defmodule ClaudeCodeEx.PortServer do
 
   defp handle_response(%{"type" => "error", "query_id" => query_id} = response, state) do
     case Map.pop(state.pending, query_id) do
-      {%{from: from}, pending} ->
-        GenServer.reply(from, {:error, response["error"]})
+      {%{recipient: recipient}, pending} ->
+        # Send a final "error" event. The GenServer call already replied.
+        send(recipient, {:agent_event, query_id, :error, response["error"]})
         {:noreply, %{state | pending: pending}}
 
       {nil, _} ->
@@ -404,7 +458,6 @@ defmodule ClaudeCodeEx.PortServer do
   defp opts_to_js_options(opts) do
     %{
       working_dir: Keyword.get(opts, :working_dir),
-      tools: Keyword.get(opts, :tools),
       system_prompt: Keyword.get(opts, :system_prompt),
       model: Keyword.get(opts, :model)
     }
