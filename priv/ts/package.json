@@ -1,0 +1,13 @@
+{
+  "name": "claude-agent-wrapper",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "TypeScript wrapper for Claude Agent SDK 2.0 - stdio bridge for Elixir",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "^2.0.9"
+  }
+}
