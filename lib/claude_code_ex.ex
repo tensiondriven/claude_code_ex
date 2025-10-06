@@ -160,7 +160,9 @@ defmodule ClaudeCodeEx do
   @type query_options :: [
           working_dir: String.t(),
           tools: [String.t()],
-          system_prompt: String.t()
+          system_prompt: String.t(),
+          model: String.t(),
+          ash_tools: keyword()
         ]
 
   @type callback :: (atom(), any() -> any())
@@ -177,6 +179,11 @@ defmodule ClaudeCodeEx do
   - `:tools` - List of tools to enable: `["filesystem", "web_search", "code_search"]`
   - `:system_prompt` - Optional system prompt to guide the agent's behavior
   - `:model` - Model to use (e.g., `"anthropic/claude-3-5-sonnet"`, `"glm-4.5-turbo"` for OpenRouter/GLM)
+  - `:ash_tools` - Enable AshAi tools. Options:
+    - `[otp_app: :my_app]` - Discover all tools from your app
+    - `[domains: [MyApp.Blog, MyApp.Accounts]]` - Use specific domains
+    - `[actor: user]` - Actor for Ash action execution
+    - `[tenant: tenant_id]` - Tenant context
 
   ## Examples
 
@@ -218,6 +225,9 @@ defmodule ClaudeCodeEx do
   """
   @spec query(String.t(), query_options()) :: {:ok, String.t()} | {:error, term()}
   def query(prompt, opts \\ []) do
+    # Process ash_tools if provided
+    opts = maybe_add_ash_tools(opts)
+
     case PortServer.query(prompt, opts) do
       {:ok, messages} ->
         # Extract final text response from messages
@@ -421,5 +431,24 @@ defmodule ClaudeCodeEx do
 
   defp generate_query_id do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+  end
+
+  defp maybe_add_ash_tools(opts) do
+    case Keyword.get(opts, :ash_tools) do
+      nil ->
+        opts
+
+      ash_opts when is_list(ash_opts) ->
+        case ClaudeCodeEx.AshAi.convert_ash_tools(ash_opts) do
+          {:ok, custom_tools} ->
+            # Add custom tools to the opts
+            Keyword.put(opts, :custom_tools, custom_tools)
+
+          {:error, reason} ->
+            require Logger
+            Logger.warning("Failed to load AshAi tools: #{inspect(reason)}")
+            opts
+        end
+    end
   end
 end

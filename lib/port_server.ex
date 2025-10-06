@@ -148,12 +148,12 @@ defmodule ClaudeCodeEx.PortServer do
 
       agent_script =
         Keyword.get(opts, :agent_script) ||
-          Path.join(:code.priv_dir(:claude_agent), "ts/agent.mjs")
+          Path.join(:code.priv_dir(:claude_code_ex), "ts/agent.mjs")
 
       unless File.exists?(agent_script),
         do: raise("agent.mjs not found at #{agent_script}")
 
-      base_url = Application.get_env(:claude_agent, :base_url)
+      base_url = Keyword.get(opts, :base_url) || Application.get_env(:claude_code_ex, :base_url)
 
       env =
         [
