@@ -183,7 +183,6 @@ async function processQuery(request) {
  * Main loop - read requests from stdin
  */
 log('Claude Agent SDK wrapper started');
-log('SDK Version', require('./node_modules/@anthropic-ai/claude-code/package.json').version);
 
 rl.on('line', async (line) => {
   try {

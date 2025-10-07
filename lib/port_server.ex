@@ -157,8 +157,8 @@ defmodule ClaudeCodeEx.PortServer do
 
       env =
         [
-          {"ANTHROPIC_API_KEY", api_key},
-          {"NODE_ENV", to_string(Mix.env())}
+          {~c"ANTHROPIC_API_KEY", String.to_charlist(api_key)},
+          {~c"NODE_ENV", String.to_charlist(to_string(Mix.env()))}
         ]
         |> maybe_add_base_url(base_url)
 
@@ -415,6 +415,6 @@ defmodule ClaudeCodeEx.PortServer do
   defp maybe_add_base_url(env, nil), do: env
 
   defp maybe_add_base_url(env, base_url) do
-    [{"ANTHROPIC_BASE_URL", base_url} | env]
+    [{~c"ANTHROPIC_BASE_URL", String.to_charlist(base_url)} | env]
   end
 end
