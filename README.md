@@ -156,30 +156,65 @@ The integration:
 - Supports actor context and multi-tenancy
 - Works with all CRUD action types
 
-## Advanced Configuration
+## Provider Configuration
+
+### Anthropic (Claude - Default)
 
 ```elixir
-# Anthropic (default)
 config :claude_code_ex,
+  provider: :anthropic,  # optional, this is the default
   api_key: System.get_env("ANTHROPIC_API_KEY")
+```
 
-# OpenRouter (for GLM-4.5, GPT-4, etc.)
+### OpenRouter (GLM-4.5, GPT-4, Claude, etc.)
+
+```elixir
 config :claude_code_ex,
+  provider: :openrouter,
   api_key: System.get_env("OPENROUTER_API_KEY"),
   base_url: "https://openrouter.ai/api/v1"
+```
 
-# Local LLM (Ollama, vLLM, LMStudio)
+Then specify the model in queries:
+```elixir
+ClaudeCodeEx.query("Hello", model: "glm-4.5-turbo")
+# or "anthropic/claude-3.5-sonnet"
+# or "openai/gpt-4"
+```
+
+### Local LLM (Ollama, vLLM, LMStudio)
+
+```elixir
+# Ollama
 config :claude_code_ex,
+  provider: :ollama,
   api_key: "not-used",
-  base_url: "http://localhost:11434/v1"  # Ollama
-  # base_url: "http://localhost:8000/v1"  # vLLM
-  # base_url: "http://localhost:1234/v1"  # LMStudio
+  base_url: "http://localhost:11434/v1"
 
-# Custom paths
+# vLLM
 config :claude_code_ex,
+  provider: :vllm,
+  api_key: "not-used",
+  base_url: "http://localhost:8000/v1"
+
+# LMStudio
+config :claude_code_ex,
+  provider: :lmstudio,
+  api_key: "not-used",
+  base_url: "http://localhost:1234/v1"
+```
+
+### Custom/Advanced
+
+```elixir
+config :claude_code_ex,
+  api_key: "your-key",
+  base_url: "https://custom-endpoint.com/v1",
   node_path: "/custom/path/to/node",
   agent_script: "/custom/path/to/agent.mjs"
 ```
+
+**Note:** The `:provider` field is purely for clarity in your config - the actual routing is determined by `:base_url`. If you don't set `:base_url`, it defaults to Anthropic's API.
 
 ## Testing
 
